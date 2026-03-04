@@ -688,28 +688,27 @@ def handle_student_id_first(message):
 
     for subject_name in all_subjects:
         object_index = DICT_SUBJECT[subject_name]
+        
+        # ПРОВЕРКА ТАЙМЕРА ПЕРЕД запросом (гарантированно сработает)
+        if time.time() - start_time > TIMEOUT_SECONDS:
+            logger.warning(f"Таймаут подключения для {chat_id}: превышено {TIMEOUT_SECONDS}с")
+            try:
+                bot.send_message(
+                    chat_id, 
+                    "⏱ Превышено время ожидания. Попробуйте позже.",
+                    reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add("Начать")
+                )
+            except Exception as e:
+                logger.error(f"Ошибка отправки таймаута: {e}")
+            with data_lock:
+                user_selected_data.pop(chat_id, None)
+                user_subscriptions.pop(chat_id, None)
+                user_state.pop(chat_id, None)
+            return
 
         try:
             bot.send_chat_action(chat_id=chat_id, action="typing")
             data = fetch_rating_from_site(object_index, student_id)
-
-            # ПРОВЕРКА ТАЙМЕРА ПОСЛЕ ЗАПРОСА (точнее)
-            if time.time() - start_time > TIMEOUT_SECONDS:
-                logger.warning(f"Таймаут подключения для {chat_id}: превышено {TIMEOUT_SECONDS}с")
-                try:
-                    bot.send_message(
-                        chat_id, 
-                        "⏱ Превышено время ожидания. Попробуйте позже.",
-                        reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add("Начать")
-                    )
-                except Exception as e:
-                    logger.error(f"Ошибка отправки таймаута: {e}")
-                # Очищаем состояние, чтобы пользователь мог начать заново
-                with data_lock:
-                    user_selected_data.pop(chat_id, None)
-                    user_subscriptions.pop(chat_id, None)
-                    user_state.pop(chat_id, None)
-                return
 
             if data:
                 success = True
@@ -718,7 +717,24 @@ def handle_student_id_first(message):
 
         except requests.exceptions.RequestException as e:
             logger.warning(f"Ошибка запроса для {subject_name}: {e}")
-            continue
+            continue  # continue теперь не страшен — проверка таймера была ДО try
+
+    # ФИНАЛЬНАЯ ПРОВЕРКА ТАЙМЕРА после цикла (на случай, если цикл завершился "впритык")
+    if time.time() - start_time > TIMEOUT_SECONDS:
+        logger.warning(f"Таймаут после цикла для {chat_id}")
+        try:
+            bot.send_message(
+                chat_id, 
+                "⏱ Превышено время ожидания. Попробуйте позже.",
+                reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add("Начать")
+            )
+        except Exception as e:
+            logger.error(f"Ошибка отправки финального таймаута: {e}")
+        with data_lock:
+            user_selected_data.pop(chat_id, None)
+            user_subscriptions.pop(chat_id, None)
+            user_state.pop(chat_id, None)
+        return
 
     # Если ни один предмет не загрузился
     if not success:
@@ -736,10 +752,11 @@ def handle_student_id_first(message):
             user_state.pop(chat_id, None)
         return
     
+    # ✅ Успех — переходим к следующему шагу
     try:
         bot.send_message(
             chat_id, 
-            "Уведомления успешно подключены",
+            "✅ Уведомления успешно подключены",
             reply_markup=types.ReplyKeyboardRemove()
         )
     except Exception as e:
