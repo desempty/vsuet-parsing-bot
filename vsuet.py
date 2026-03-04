@@ -627,22 +627,18 @@ def handle_choose_subject(message):
     user_state[message.chat.id] == "entering_id_first"
 )
 def handle_student_id_first(message):
-    """Обработчик ввода номера студента"""
+    """Обработчик ввода номера студента с корректным таймером"""
     chat_id = message.chat.id
     student_id = message.text.strip()
-    success = False
     
     # ПРЕДУПРЕЖДЕНИЕ О НОЧНОМ ВРЕМЕНИ
     if not is_site_available():
         try:
-
             markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False)
             markup.row("Выбрать другой предмет", "Отмена")
-
             bot.send_message(
                 chat_id,
-                "Сайт рейтинга недоступен с 19:00 до 09:00.\n"
-                "Попробуйте запросить данные днём.",
+                "Сайт рейтинга недоступен с 19:00 до 09:00.\nПопробуйте запросить данные днём.",
                 reply_markup=markup
             )
         except Exception as e:
@@ -655,23 +651,20 @@ def handle_student_id_first(message):
         try:
             bot.send_message(
                 chat_id,
-                "Номер зачётной книжки должен содержать ровно 6 цифр.\n"
-                "Повторите ввод:",
+                "Номер зачётной книжки должен содержать ровно 6 цифр.\nПовторите ввод:",
                 reply_markup=create_cancel_markup()
             )
         except Exception as e:
             logger.error(f"Ошибка отправки сообщения: {e}")
         return
     
+    # Сохраняем данные пользователя
     with data_lock:
-        # ДОБАВЛЕНО: версия сессии
         user_selected_data[chat_id] = {
             "student_id": student_id,
             "version": CURRENT_SESSION_VERSION
         }
-        
         all_subjects = list(DICT_SUBJECT.keys())
-        # ДОБАВЛЕНО: версия подписки
         user_subscriptions[chat_id] = {
             "student_id": student_id, 
             "subjects": all_subjects,
@@ -682,49 +675,87 @@ def handle_student_id_first(message):
     try:
         bot.send_message(
             chat_id,
-            "Подключение уведомлений... Ожидайте",
+            "Подключение уведомлений...\nЭто может занять до 3 минут. Ожидайте...",
             reply_markup=types.ReplyKeyboardRemove()
         )
     except Exception as e:
         logger.error(f"Ошибка отправки сообщения: {e}")
+    
+    # НАСТРОЙКИ ТАЙМЕРА
+    start_time = time.time()
+    success = False
+    TIMEOUT_SECONDS = 180  # 3 минуты
 
     for subject_name in all_subjects:
         object_index = DICT_SUBJECT[subject_name]
+
         try:
+            bot.send_chat_action(chat_id=chat_id, action="typing")
             data = fetch_rating_from_site(object_index, student_id)
+
+            # ПРОВЕРКА ТАЙМЕРА ПОСЛЕ ЗАПРОСА (точнее)
+            if time.time() - start_time > TIMEOUT_SECONDS:
+                logger.warning(f"Таймаут подключения для {chat_id}: превышено {TIMEOUT_SECONDS}с")
+                try:
+                    bot.send_message(
+                        chat_id, 
+                        "⏱ Превышено время ожидания. Попробуйте позже.",
+                        reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add("Начать")
+                    )
+                except Exception as e:
+                    logger.error(f"Ошибка отправки таймаута: {e}")
+                # Очищаем состояние, чтобы пользователь мог начать заново
+                with data_lock:
+                    user_selected_data.pop(chat_id, None)
+                    user_subscriptions.pop(chat_id, None)
+                    user_state.pop(chat_id, None)
+                return
 
             if data:
                 success = True
                 with data_lock:
                     previous_ratings.setdefault(chat_id, {})[subject_name] = data
 
-        except requests.exceptions.RequestException:
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Ошибка запроса для {subject_name}: {e}")
             continue
 
+    # Если ни один предмет не загрузился
     if not success:
-        bot.send_message(chat_id, "Сайт сейчас недоступен. Попробуйте позже.")
+        try:
+            bot.send_message(
+                chat_id, 
+                "Не удалось получить данные. Попробуйте позже.",
+                reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add("Начать")
+            )
+        except Exception as e:
+            logger.error(f"Ошибка отправки при неудаче: {e}")
+        with data_lock:
+            user_selected_data.pop(chat_id, None)
+            user_subscriptions.pop(chat_id, None)
+            user_state.pop(chat_id, None)
         return
     
     try:
         bot.send_message(
-            chat_id,
+            chat_id, 
             "Уведомления успешно подключены",
             reply_markup=types.ReplyKeyboardRemove()
         )
     except Exception as e:
-        logger.error(f"Ошибка отправки сообщения: {e}")
-    
+        logger.error(f"Ошибка отправки успеха: {e}")
+
     with data_lock:
         user_state[chat_id] = "choosing_subject_after_id"
-    
+
     try:
         bot.send_message(
-            chat_id,
+            chat_id, 
             create_subject_menu_text(),
             reply_markup=create_subject_keyboard()
         )
     except Exception as e:
-        logger.error(f"Ошибка отправки сообщения: {e}")
+        logger.error(f"Ошибка отправки меню: {e}")
 
 # 4.6. Handler выбора предмета
 @bot.message_handler(
