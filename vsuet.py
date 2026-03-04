@@ -695,7 +695,7 @@ def handle_student_id_first(message):
             try:
                 bot.send_message(
                     chat_id, 
-                    "⏱ Превышено время ожидания. Попробуйте позже.",
+                    "Превышено время ожидания. Попробуйте позже.",
                     reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add("Начать")
                 )
             except Exception as e:
@@ -725,7 +725,7 @@ def handle_student_id_first(message):
         try:
             bot.send_message(
                 chat_id, 
-                "⏱ Превышено время ожидания. Попробуйте позже.",
+                "Превышено время ожидания. Попробуйте позже.",
                 reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add("Начать")
             )
         except Exception as e:
@@ -741,7 +741,7 @@ def handle_student_id_first(message):
         try:
             bot.send_message(
                 chat_id, 
-                "Не удалось получить данные. Попробуйте позже.",
+                "Сайт не отвечает. Попробуйте позже.",
                 reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add("Начать")
             )
         except Exception as e:
