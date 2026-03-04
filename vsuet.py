@@ -44,6 +44,8 @@ CONFIG = {
     "CLEANUP_INTERVAL": 86400  # Проверка раз в сутки (в секундах)
 }
 
+CURRENT_SESSION_VERSION = "1.1"
+
 # Словарь предметов и их id на сайте для формирования url на таблицу с рейтингов
 DICT_SUBJECT = {
     "WEB-технологии": "254035",
@@ -370,7 +372,7 @@ def fetch_rating_from_site(object_index, student_id):
     
     except Exception as e:
         logger.error(f"Ошибка: {e}")
-        return None
+        raise
 
 # 2.7. Создание кнопки "Отмена"
 def create_cancel_markup():
@@ -635,12 +637,18 @@ def handle_student_id_first(message):
         return
     
     with data_lock:
-        user_selected_data[chat_id] = {"student_id": student_id}
+        # ДОБАВЛЕНО: версия сессии
+        user_selected_data[chat_id] = {
+            "student_id": student_id,
+            "version": CURRENT_SESSION_VERSION
+        }
         
         all_subjects = list(DICT_SUBJECT.keys())
+        # ДОБАВЛЕНО: версия подписки
         user_subscriptions[chat_id] = {
             "student_id": student_id, 
-            "subjects": all_subjects
+            "subjects": all_subjects,
+            "version": CURRENT_SESSION_VERSION
         }
         user_last_activity[chat_id] = time.time()
     
@@ -695,14 +703,13 @@ def handle_student_id_first(message):
 def handle_subject_choice_after_id(message):
     chat_id = message.chat.id
     update_activity(chat_id)
-
     logger.info(f"{chat_id} выбрал предмет: {message.text}")
+
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("Выбрать другой предмет", "Отмена")
 
     # проверка времени
     if not is_site_available():
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.row("Выбрать другой предмет", "Отмена")
-
         bot.send_message(
             chat_id,
             "Сайт рейтинга недоступен с 19:00 до 09:00.\nПопробуйте днём.",
@@ -710,22 +717,29 @@ def handle_subject_choice_after_id(message):
         )
         return
 
-    # проверка сессии
+    # ПРОВЕРКА ВЕРСИИ СЕССИИ
     with data_lock:
-        if chat_id not in user_selected_data:
+        user_data = user_selected_data.get(chat_id)
+        
+        if not user_data or user_data.get("version") != CURRENT_SESSION_VERSION:
             bot.send_message(
                 chat_id,
-                "Сессия устарела. Нажмите «Начать»",
+                "🔄 Бот обновился. Нажмите «Начать» или введите /start, чтобы продолжить.",
                 reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add("Начать")
             )
+            user_selected_data.pop(chat_id, None)
             return
 
-        student_id = user_selected_data[chat_id]["student_id"]
+        student_id = user_data["student_id"]
 
-    choice = int(message.text)
+    try:
+        choice = int(message.text)
+    except ValueError:
+        bot.send_message(chat_id, f"Введите число от 1 до {len(DICT_SUBJECT)}", reply_markup=markup)
+        return
 
     if not (1 <= choice <= len(DICT_SUBJECT)):
-        bot.send_message(chat_id, f"Введите число от 1 до {len(DICT_SUBJECT)}")
+        bot.send_message(chat_id, f"Введите число от 1 до {len(DICT_SUBJECT)}", reply_markup=markup)
         return
 
     subject_name = list(DICT_SUBJECT.keys())[choice - 1]
@@ -733,14 +747,49 @@ def handle_subject_choice_after_id(message):
 
     bot.send_message(chat_id, "Загружаем данные...")
 
-    data = fetch_rating_from_site(object_index, student_id)
+    # ОБРАБОТКА ОШИБОК ЗАПРОСА К САЙТУ
+    try:
+        data = fetch_rating_from_site(object_index, student_id)
+    except requests.exceptions.ConnectTimeout:
+        bot.send_message(
+            chat_id,
+            "Сайт временно недоступен (таймаут). Повторите запрос позже.",
+            reply_markup=markup
+        )
+        return
+    except requests.exceptions.ConnectionError:
+        bot.send_message(
+            chat_id,
+            "Не удалось подключиться к сайту. Проверьте интернет или попробуйте позже.",
+            reply_markup=markup
+        )
+        return
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            bot.send_message(
+                chat_id,
+                f"Студент {student_id} не найден в системе.",
+                reply_markup=markup
+            )
+        else:
+            bot.send_message(
+                chat_id,
+                f"Ошибка сервера ({e.response.status_code}). Попробуйте позже.",
+                reply_markup=markup
+            )
+        return
+    except Exception as e:
+        logger.error(f"Непредвиденная ошибка при получении рейтинга: {e}", exc_info=True)
+        bot.send_message(
+            chat_id,
+            "Произошла непредвиденная ошибка. Попробуйте позже или обратитесь к разработчику.",
+            reply_markup=markup
+        )
+        return
 
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("Выбрать другой предмет", "Отмена")
-
+    # Основная логика (если всё успешно)
     if data:
         image = create_rating_image(data, student_id, subject_name)
-
         bot.send_photo(
             chat_id,
             image,
@@ -753,7 +802,7 @@ def handle_subject_choice_after_id(message):
             f"Студент {student_id} не найден.",
             reply_markup=markup
         )
-
+        
 # 4.7 Обработчик команды "Выбрать другой предмет"
 @bot.message_handler(func=lambda m: m.text == "Выбрать другой предмет")
 def handle_choose_again(message):
