@@ -383,7 +383,7 @@ def fetch_rating_from_site(object_index, student_id):
         response = requests.get(
             url,
             headers={"User-Agent": random.choice(USER_AGENTS)},
-            timeout=15 # Ожидание в 15 секунд для загрузки всего HTML-кода
+            timeout=5 # Ожидание в 15 секунд для загрузки всего HTML-кода
         )
         response.raise_for_status()
 
